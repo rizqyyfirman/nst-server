@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NST Doppler — Database Pasien</title>
+<style>
+  :root {
+    --bg: #f5f5f5;
+    --card: #ffffff;
+    --border: #e0e0e0;
+    --text: #1a1a1a;
+    --text-muted: #6b7280;
+    --primary: #7c3aed;
+    --primary-light: #ede9fe;
+    --primary-dark: #5b21b6;
+    --danger: #dc2626;
+    --success: #059669;
+    --radius: 12px;
+    --shadow: 0 1px 3px rgba(0,0,0,0.1), 0 1px 2px rgba(0,0,0,0.06);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         background: var(--bg); color: var(--text); min-height: 100vh; }
+
+  /* ── Page system ── */
+  .page { display: none; }
+  .page.active { display: flex; }
+
+  /* ── Login Page ── */
+  #page-login {
+    min-height: 100vh;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%);
+  }
+  .login-card {
+    background: var(--card);
+    border-radius: var(--radius);
+    padding: 40px;
+    width: 100%;
+    max-width: 400px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+  }
+  .login-logo {
+    text-align: center;
+    margin-bottom: 28px;
+  }
+  .login-logo h1 { font-size: 26px; color: var(--primary); font-weight: 700; }
+  .login-logo p  { color: var(--text-muted); font-size: 14px; margin-top: 4px; }
+  .form-group { margin-bottom: 16px; }
+  .form-group label { display: block; font-size: 13px; font-weight: 600;
+                      color: var(--text); margin-bottom: 6px; }
+  .form-group input {
+    width: 100%; padding: 10px 14px; border: 1.5px solid var(--border);
+    border-radius: 8px; font-size: 15px; transition: border-color .2s;
+    background: white; color: var(--text);
+  }
+  .form-group input:focus { outline: none; border-color: var(--primary); }
+  .btn-primary {
+    width: 100%; padding: 12px; background: var(--primary);
+    color: white; border: none; border-radius: 8px;
+    font-size: 15px; font-weight: 600; cursor: pointer; transition: background .2s;
+  }
+  .btn-primary:hover { background: var(--primary-dark); }
+  .error-msg { color: var(--danger); font-size: 13px; margin-top: 10px;
+               text-align: center; min-height: 18px; }
+
+  /* ── Dashboard ── */
+  #page-dashboard { flex-direction: column; min-height: 100vh; }
+  .topbar {
+    background: var(--card); border-bottom: 1px solid var(--border);
+    padding: 0 24px; height: 60px; display: flex;
+    align-items: center; justify-content: space-between;
+    box-shadow: var(--shadow);
+  }
+  .topbar-title { font-size: 18px; font-weight: 700; color: var(--primary); }
+  .topbar-user  { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--text-muted); }
+  .btn-logout {
+    padding: 6px 14px; background: transparent; border: 1.5px solid var(--border);
+    border-radius: 6px; cursor: pointer; font-size: 13px; color: var(--text-muted);
+    transition: all .2s;
+  }
+  .btn-logout:hover { border-color: var(--danger); color: var(--danger); }
+
+  .main-content { flex: 1; padding: 24px; max-width: 1100px; width: 100%; margin: 0 auto; }
+
+  /* ── Breadcrumb ── */
+  .breadcrumb { display: flex; align-items: center; gap: 8px;
+                font-size: 13px; color: var(--text-muted); margin-bottom: 20px; }
+  .breadcrumb span { cursor: pointer; transition: color .2s; }
+  .breadcrumb span:hover { color: var(--primary); }
+  .breadcrumb .sep { color: var(--border); }
+  .breadcrumb .current { color: var(--text); font-weight: 600; cursor: default; }
+
+  /* ── Panel header ── */
+  .panel-header { margin-bottom: 20px; }
+  .panel-header h2 { font-size: 22px; font-weight: 700; }
+  .panel-header p  { font-size: 14px; color: var(--text-muted); margin-top: 4px; }
+
+  /* ── Pasien list ── */
+  .pasien-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; }
+  .pasien-card {
+    background: var(--card); border: 1.5px solid var(--border);
+    border-radius: var(--radius); padding: 18px 20px;
+    cursor: pointer; transition: all .2s;
+  }
+  .pasien-card:hover { border-color: var(--primary); box-shadow: 0 4px 12px rgba(124,58,237,0.12); }
+  .pasien-card h3  { font-size: 15px; font-weight: 600; }
+  .pasien-card .id { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+  .pasien-card .badge {
+    display: inline-block; margin-top: 10px;
+    background: var(--primary-light); color: var(--primary-dark);
+    font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: 20px;
+  }
+
+  /* ── Pemeriksaan list ── */
+  .pem-list { display: flex; flex-direction: column; gap: 14px; }
+  .pem-card {
+    background: var(--card); border: 1.5px solid var(--border);
+    border-radius: var(--radius); padding: 20px 24px;
+  }
+  .pem-card-header {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    margin-bottom: 14px;
+  }
+  .pem-date { font-size: 16px; font-weight: 700; }
+  .bpm-badge {
+    background: #ecfdf5; color: #065f46;
+    font-size: 13px; font-weight: 700;
+    padding: 4px 12px; border-radius: 20px;
+  }
+  .pem-meta { display: flex; gap: 24px; flex-wrap: wrap; margin-bottom: 16px; }
+  .pem-meta div { font-size: 13px; color: var(--text-muted); }
+  .pem-meta strong { color: var(--text); display: block; font-size: 14px; font-weight: 600; }
+
+  /* ── Audio Player ── */
+  .audio-section { border-top: 1px solid var(--border); padding-top: 14px; }
+  .audio-label { font-size: 12px; font-weight: 600; color: var(--text-muted);
+                 text-transform: uppercase; letter-spacing: .5px; margin-bottom: 10px; }
+  .audio-player {
+    display: flex; align-items: center; gap: 12px;
+    background: #f9fafb; border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 14px;
+  }
+  .play-btn {
+    width: 36px; height: 36px; border-radius: 50%;
+    background: var(--primary); color: white; border: none;
+    cursor: pointer; font-size: 14px; display: flex;
+    align-items: center; justify-content: center; flex-shrink: 0;
+    transition: background .2s;
+  }
+  .play-btn:hover { background: var(--primary-dark); }
+  .audio-progress-wrap { flex: 1; }
+  .audio-progress {
+    width: 100%; height: 4px; background: var(--border);
+    border-radius: 2px; cursor: pointer; appearance: none;
+    accent-color: var(--primary);
+  }
+  .audio-time {
+    font-size: 12px; color: var(--text-muted);
+    margin-top: 4px; display: flex; justify-content: space-between;
+  }
+  .volume-wrap { display: flex; align-items: center; gap: 6px; }
+  .volume-wrap span { font-size: 14px; }
+  .volume-wrap input {
+    width: 64px; height: 4px; accent-color: var(--primary);
+    cursor: pointer; appearance: auto;
+  }
+
+  /* ── Loading / Empty ── */
+  .loading { text-align: center; padding: 40px; color: var(--text-muted); }
+  .empty   { text-align: center; padding: 60px; color: var(--text-muted); }
+  .empty svg { opacity: .3; margin-bottom: 12px; }
+  .spinner {
+    width: 32px; height: 32px; border: 3px solid var(--border);
+    border-top-color: var(--primary); border-radius: 50%;
+    animation: spin .7s linear infinite; margin: 0 auto 12px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<!-- ══ PAGE 1: LOGIN ══════════════════════════════════ -->
+<div id="page-login" class="page active">
+  <div class="login-card">
+    <div class="login-logo">
+      <h1>NST Doppler</h1>
+      <p>Sistem Database Pemeriksaan Janin</p>
+    </div>
+    <div class="form-group">
+      <label>ID Admin</label>
+      <input type="text" id="login-id" placeholder="admin" autocomplete="username">
+    </div>
+    <div class="form-group">
+      <label>Password</label>
+      <input type="password" id="login-pw" placeholder="••••••••" autocomplete="current-password"
+             onkeydown="if(event.key==='Enter') doLogin()">
+    </div>
+    <button class="btn-primary" onclick="doLogin()">Masuk</button>
+    <div class="error-msg" id="login-error"></div>
+  </div>
+</div>
+
+<!-- ══ PAGE 2: DASHBOARD ═════════════════════════════ -->
+<div id="page-dashboard" class="page">
+  <div class="topbar">
+    <span class="topbar-title">NST Doppler</span>
+    <div class="topbar-user">
+      <span id="topbar-username">Admin</span>
+      <button class="btn-logout" onclick="doLogout()">Keluar</button>
+    </div>
+  </div>
+
+  <div class="main-content">
+    <div class="breadcrumb" id="breadcrumb">
+      <span class="current">Daftar Pasien</span>
+    </div>
+
+    <!-- Panel: daftar pasien -->
+    <div id="panel-pasien">
+      <div class="panel-header">
+        <h2>Daftar Pasien</h2>
+        <p id="pasien-count-txt">Memuat data...</p>
+      </div>
+      <div class="pasien-grid" id="pasien-grid">
+        <div class="loading"><div class="spinner"></div>Memuat...</div>
+      </div>
+    </div>
+
+    <!-- Panel: riwayat pemeriksaan 1 pasien -->
+    <div id="panel-pemeriksaan" style="display:none">
+      <div class="panel-header">
+        <h2 id="pem-pasien-name">—</h2>
+        <p id="pem-pasien-meta">—</p>
+      </div>
+      <div class="pem-list" id="pem-list">
+        <div class="loading"><div class="spinner"></div>Memuat...</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Config ───────────────────────────────────────────
+const API = '';   // Kosong = same origin; isi jika server beda domain
+let TOKEN = localStorage.getItem('nst_token') || '';
+let currentPatientId   = '';
+let currentPatientName = '';
+const audioMap = {};  // cache HTMLAudioElement per pemeriksaan id
+
+// ── Auth ─────────────────────────────────────────────
+async function doLogin() {
+  const id = document.getElementById('login-id').value.trim();
+  const pw = document.getElementById('login-pw').value;
+  document.getElementById('login-error').textContent = '';
+  try {
+    const r = await fetch(API + '/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: id, password: pw })
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Login gagal');
+    TOKEN = d.token;
+    localStorage.setItem('nst_token', TOKEN);
+    showDashboard();
+  } catch (e) {
+    document.getElementById('login-error').textContent = e.message;
+  }
+}
+
+function doLogout() {
+  TOKEN = '';
+  localStorage.removeItem('nst_token');
+  showPage('page-login');
+}
+
+// ── Navigation ────────────────────────────────────────
+function showPage(id) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+}
+
+function showDashboard() {
+  document.getElementById('topbar-username').textContent = 'Admin';
+  showPage('page-dashboard');
+  showPanelPasien();
+}
+
+function setBreadcrumb(parts) {
+  const bc = document.getElementById('breadcrumb');
+  bc.innerHTML = parts.map((p, i) => {
+    if (i === parts.length - 1)
+      return `<span class="current">${p.label}</span>`;
+    return `<span onclick="${p.onclick}">${p.label}</span><span class="sep">›</span>`;
+  }).join('');
+}
+
+// ── Panel: Daftar Pasien ─────────────────────────────
+async function showPanelPasien() {
+  document.getElementById('panel-pasien').style.display = '';
+  document.getElementById('panel-pemeriksaan').style.display = 'none';
+  setBreadcrumb([{ label: 'Daftar Pasien' }]);
+
+  const grid = document.getElementById('pasien-grid');
+  grid.innerHTML = '<div class="loading"><div class="spinner"></div>Memuat...</div>';
+
+  try {
+    const r = await fetch(API + '/api/pasien', {
+      headers: { 'Authorization': 'Bearer ' + TOKEN }
+    });
+    if (r.status === 401) { doLogout(); return; }
+    const data = await r.json();
+
+    document.getElementById('pasien-count-txt').textContent =
+      `Total ${data.length} pasien terdaftar`;
+
+    if (data.length === 0) {
+      grid.innerHTML = `<div class="empty">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>
+          <path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+        </svg>
+        <p>Belum ada data pasien</p>
+      </div>`;
+      return;
+    }
+
+    grid.innerHTML = data.map(p => `
+      <div class="pasien-card" onclick="showPanelPemeriksaan('${p.id_pasien}','${escHtml(p.nama)}')">
+        <h3>${escHtml(p.nama)}</h3>
+        <div class="id">ID: ${escHtml(p.id_pasien)}</div>
+        <span class="badge">${p.jumlah_pemeriksaan}× pemeriksaan</span>
+      </div>
+    `).join('');
+  } catch (e) {
+    grid.innerHTML = `<div class="empty"><p>Error: ${e.message}</p></div>`;
+  }
+}
+
+// ── Panel: Riwayat Pemeriksaan ───────────────────────
+async function showPanelPemeriksaan(idPasien, nama) {
+  currentPatientId   = idPasien;
+  currentPatientName = nama;
+  document.getElementById('panel-pasien').style.display = 'none';
+  document.getElementById('panel-pemeriksaan').style.display = '';
+  setBreadcrumb([
+    { label: 'Daftar Pasien', onclick: 'showPanelPasien()' },
+    { label: escHtml(nama) }
+  ]);
+
+  document.getElementById('pem-pasien-name').textContent = nama;
+  document.getElementById('pem-pasien-meta').textContent = 'ID Pasien: ' + idPasien;
+
+  const list = document.getElementById('pem-list');
+  list.innerHTML = '<div class="loading"><div class="spinner"></div>Memuat...</div>';
+
+  try {
+    const r = await fetch(API + '/api/pasien/' + encodeURIComponent(idPasien), {
+      headers: { 'Authorization': 'Bearer ' + TOKEN }
+    });
+    if (r.status === 401) { doLogout(); return; }
+    const data = await r.json();
+
+    if (data.length === 0) {
+      list.innerHTML = '<div class="empty"><p>Belum ada pemeriksaan</p></div>';
+      return;
+    }
+
+    list.innerHTML = data.map(pem => `
+      <div class="pem-card">
+        <div class="pem-card-header">
+          <div class="pem-date">📅 ${escHtml(pem.tanggal)}</div>
+          <span class="bpm-badge">♥ ${Math.round(pem.avg_bpm)} BPM</span>
+        </div>
+        <div class="pem-meta">
+          <div><div>Nama</div><strong>${escHtml(pem.nama)}</strong></div>
+          <div><div>Usia</div><strong>${escHtml(pem.usia)} tahun</strong></div>
+          <div><div>Usia Kandungan</div><strong>${escHtml(pem.usia_kandungan)} minggu</strong></div>
+          <div><div>ID Pasien</div><strong>${escHtml(pem.id_pasien)}</strong></div>
+        </div>
+        <div class="audio-section">
+          <div class="audio-label">Rekaman Doppler</div>
+          ${buildAudioPlayer(pem)}
+        </div>
+      </div>
+    `).join('');
+  } catch (e) {
+    list.innerHTML = `<div class="empty"><p>Error: ${e.message}</p></div>`;
+  }
+}
+
+// ── Audio Player ──────────────────────────────────────
+function buildAudioPlayer(pem) {
+  const audioUrl = API + '/uploads/' + encodeURIComponent(pem.file_path);
+  const pid = 'aud-' + pem.id;
+  return `
+    <div class="audio-player">
+      <button class="play-btn" id="btn-${pid}" onclick="togglePlay('${pid}','${audioUrl}')">▶</button>
+      <div class="audio-progress-wrap">
+        <input type="range" class="audio-progress" id="prog-${pid}"
+               value="0" min="0" max="100" step="0.1"
+               oninput="seekAudio('${pid}', this.value)">
+        <div class="audio-time">
+          <span id="cur-${pid}">0:00</span>
+          <span id="dur-${pid}">0:08</span>
+        </div>
+      </div>
+      <div class="volume-wrap">
+        <span>🔊</span>
+        <input type="range" min="0" max="1" step="0.05" value="0.8"
+               oninput="setVolume('${pid}', this.value)">
+      </div>
+    </div>`;
+}
+
+function getOrCreateAudio(pid, url) {
+  if (!audioMap[pid]) {
+    const a = new Audio(url);
+    a.preload = 'metadata';
+    a.volume  = 0.8;
+    a.addEventListener('timeupdate', () => updateProgress(pid, a));
+    a.addEventListener('ended',      () => resetPlayer(pid));
+    a.addEventListener('loadedmetadata', () => {
+      const d = document.getElementById('dur-' + pid);
+      if (d) d.textContent = fmtTime(a.duration);
+    });
+    audioMap[pid] = a;
+  }
+  return audioMap[pid];
+}
+
+function togglePlay(pid, url) {
+  // Pause semua audio lain
+  Object.entries(audioMap).forEach(([k, a]) => {
+    if (k !== pid && !a.paused) {
+      a.pause();
+      const b = document.getElementById('btn-' + k);
+      if (b) b.textContent = '▶';
+    }
+  });
+  const a   = getOrCreateAudio(pid, url);
+  const btn = document.getElementById('btn-' + pid);
+  if (a.paused) {
+    a.play().catch(e => console.warn('Play error:', e));
+    btn.textContent = '⏸';
+  } else {
+    a.pause();
+    btn.textContent = '▶';
+  }
+}
+
+function seekAudio(pid, val) {
+  const a = audioMap[pid];
+  if (a && isFinite(a.duration)) a.currentTime = (val / 100) * a.duration;
+}
+
+function setVolume(pid, val) {
+  const a = audioMap[pid];
+  if (a) a.volume = parseFloat(val);
+}
+
+function updateProgress(pid, a) {
+  const prog = document.getElementById('prog-' + pid);
+  const cur  = document.getElementById('cur-'  + pid);
+  if (prog && isFinite(a.duration)) {
+    prog.value = (a.currentTime / a.duration) * 100;
+  }
+  if (cur) cur.textContent = fmtTime(a.currentTime);
+}
+
+function resetPlayer(pid) {
+  const btn  = document.getElementById('btn-'  + pid);
+  const prog = document.getElementById('prog-' + pid);
+  const cur  = document.getElementById('cur-'  + pid);
+  if (btn)  btn.textContent  = '▶';
+  if (prog) prog.value       = 0;
+  if (cur)  cur.textContent  = '0:00';
+}
+
+function fmtTime(s) {
+  if (!isFinite(s)) return '0:00';
+  const m = Math.floor(s / 60);
+  const sec = Math.floor(s % 60).toString().padStart(2, '0');
+  return `${m}:${sec}`;
+}
+
+function escHtml(str) {
+  return String(str)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Auto-login jika ada token tersimpan ──────────────
+window.addEventListener('DOMContentLoaded', () => {
+  if (TOKEN) {
+    // Verifikasi token masih valid
+    fetch(API + '/api/pasien', { headers: { 'Authorization': 'Bearer ' + TOKEN } })
+      .then(r => {
+        if (r.ok) showDashboard();
+        else { TOKEN = ''; localStorage.removeItem('nst_token'); }
+      })
+      .catch(() => {});
+  }
+});
+</script>
+</body>
+</html>
