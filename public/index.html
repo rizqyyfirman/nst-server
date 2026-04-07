@@ -394,7 +394,7 @@ async function showPanelPemeriksaan(idPasien, nama) {
 
 // ── Audio Player ──────────────────────────────────────
 function buildAudioPlayer(pem) {
-  const audioUrl = API + '/uploads/' + encodeURIComponent(pem.file_path);
+  const audioUrl = pem.file_url || '';
   const pid = 'aud-' + pem.id;
   return `
     <div class="audio-player">
