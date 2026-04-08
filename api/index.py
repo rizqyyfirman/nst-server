@@ -1,10 +1,12 @@
-from flask import Flask, request, jsonify, render_template
-import os, jwt, bcrypt
+from flask import Flask, request, jsonify, render_template, Response, stream_with_context
+import os, jwt, bcrypt, struct, io
 from datetime import datetime, timedelta, timezone
 from supabase import create_client, Client
+import requests as req_lib
 
 app = Flask(__name__, template_folder="templates")
 
+# ─── Config ──────────────────────────────────────────
 SUPABASE_URL  = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY  = os.environ.get("SUPABASE_KEY", "")
 JWT_SECRET    = os.environ.get("JWT_SECRET", "nst-secret-2024")
@@ -78,22 +80,22 @@ def login():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# ─── Upload metadata — tanggal diambil otomatis ───────
+# ─── Upload metadata ─────────────────────────────────
 @app.route("/api/upload/meta", methods=["POST"])
 def upload_meta():
     try:
         body           = request.get_json(force=True)
-        nama           = str(body.get("nama",           "")).strip()
-        usia           = str(body.get("usia",           "")).strip()
-        id_pasien      = str(body.get("idPasien",       "")).strip()
-        usia_kandungan = str(body.get("usiaKandungan",  "")).strip()
-        avg_bpm        = float(body.get("avgBpm",       0))
-        file_name      = str(body.get("fileName",       "")).strip()
+        nama           = str(body.get("nama",          "")).strip()
+        usia           = str(body.get("usia",          "")).strip()
+        id_pasien      = str(body.get("idPasien",      "")).strip()
+        usia_kandungan = str(body.get("usiaKandungan", "")).strip()
+        avg_bpm        = float(body.get("avgBpm",      0))
+        file_name      = str(body.get("fileName",      "")).strip()
 
         if not nama or not id_pasien or not file_name:
             return jsonify({"error": "nama, idPasien, fileName wajib diisi"}), 400
 
-        # Tanggal diambil otomatis dari waktu server (WIB = UTC+7)
+        # Tanggal otomatis WIB
         tanggal = datetime.now(timezone(timedelta(hours=7))).strftime("%d-%m-%Y")
 
         sb = get_supabase()
@@ -114,7 +116,7 @@ def upload_meta():
         import traceback; traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
-# ─── Upload file WAV binary ───────────────────────────
+# ─── Upload WAV binary ───────────────────────────────
 @app.route("/api/upload/wav", methods=["POST"])
 def upload_wav():
     try:
@@ -142,6 +144,132 @@ def upload_wav():
         import traceback; traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
+# ─── Konversi WAV: ubah sample rate di header ────────
+def resample_wav_header(wav_bytes: bytes,
+                        original_sr: int,
+                        target_sr: int) -> bytes:
+    """
+    Konversi WAV dengan cara mengubah header saja +
+    duplikasi sampel (nearest-neighbor upsampling).
+    Kualitas suara tetap sama, hanya kecepatan putar
+    yang disesuaikan agar browser bisa membaca.
+    """
+    # Parse header WAV (44 byte standar)
+    if len(wav_bytes) < 44:
+        return wav_bytes
+
+    # Baca info dari header asli
+    # Offset 22: numChannels (2 byte)
+    # Offset 24: sampleRate  (4 byte)
+    # Offset 28: byteRate    (4 byte)
+    # Offset 32: blockAlign  (2 byte)
+    # Offset 34: bitsPerSample (2 byte)
+    # Offset 40: dataSize    (4 byte)
+    num_channels   = struct.unpack_from('<H', wav_bytes, 22)[0]
+    bits_per_sample = struct.unpack_from('<H', wav_bytes, 34)[0]
+    data_size      = struct.unpack_from('<I', wav_bytes, 40)[0]
+
+    # Ambil data audio (setelah 44 byte header)
+    audio_data = wav_bytes[44:44 + data_size]
+
+    # Hitung faktor upsampling
+    factor = target_sr // original_sr  # 8000 // 800 = 10
+
+    # Upsample dengan duplikasi sampel (nearest-neighbor)
+    # Setiap sampel diduplikasi sebanyak 'factor' kali
+    bytes_per_sample = bits_per_sample // 8  # 2 byte untuk 16-bit
+    frame_size       = bytes_per_sample * num_channels
+    new_audio        = bytearray()
+
+    for i in range(0, len(audio_data), frame_size):
+        frame = audio_data[i:i + frame_size]
+        if len(frame) == frame_size:
+            for _ in range(factor):
+                new_audio.extend(frame)
+
+    new_data_size = len(new_audio)
+    new_byte_rate = target_sr * num_channels * bytes_per_sample
+    new_block_align = num_channels * bytes_per_sample
+    new_file_size   = new_data_size + 36  # 44 - 8
+
+    # Buat header baru
+    header = bytearray(44)
+    header[0:4]   = b'RIFF'
+    struct.pack_into('<I', header, 4,  new_file_size)
+    header[8:12]  = b'WAVE'
+    header[12:16] = b'fmt '
+    struct.pack_into('<I', header, 16, 16)           # fmtSize
+    struct.pack_into('<H', header, 20, 1)            # audioFormat PCM
+    struct.pack_into('<H', header, 22, num_channels)
+    struct.pack_into('<I', header, 24, target_sr)    # sampleRate baru
+    struct.pack_into('<I', header, 28, new_byte_rate)
+    struct.pack_into('<H', header, 32, new_block_align)
+    struct.pack_into('<H', header, 34, bits_per_sample)
+    header[36:40] = b'data'
+    struct.pack_into('<I', header, 40, new_data_size)
+
+    return bytes(header) + bytes(new_audio)
+
+# ─── Proxy audio dengan konversi sample rate ─────────
+@app.route("/api/audio/<filename>", methods=["GET"])
+def stream_audio(filename):
+    """
+    Ambil WAV dari Supabase, konversi dari 800Hz ke 8000Hz,
+    lalu kirim ke browser. Browser bisa memutar dengan normal.
+    """
+    try:
+        supabase_host = SUPABASE_URL.rstrip('/')
+        url = f"{supabase_host}/storage/v1/object/public/{BUCKET_NAME}/{filename}"
+
+        print(f"[Audio] Fetch: {url}")
+
+        r = req_lib.get(url, timeout=30)
+        if r.status_code != 200:
+            print(f"[Audio] Supabase error {r.status_code}: {r.text}")
+            return jsonify({"error": f"File tidak ditemukan: {filename}"}), 404
+
+        wav_bytes = r.content
+        print(f"[Audio] File asli: {len(wav_bytes)} bytes")
+
+        # Deteksi sample rate dari header WAV
+        if len(wav_bytes) >= 28:
+            original_sr = struct.unpack_from('<I', wav_bytes, 24)[0]
+            print(f"[Audio] Sample rate asli: {original_sr} Hz")
+
+            # Konversi ke 8000Hz jika sample rate bukan standar browser
+            if original_sr not in (8000, 11025, 16000, 22050, 44100, 48000):
+                target_sr = 8000
+                # Cari kelipatan terdekat yang bulat
+                # 800 * 10 = 8000, 400 * 20 = 8000, dst
+                if 8000 % original_sr == 0:
+                    target_sr = 8000
+                elif 16000 % original_sr == 0:
+                    target_sr = 16000
+                else:
+                    target_sr = 8000
+
+                print(f"[Audio] Konversi {original_sr}Hz -> {target_sr}Hz")
+                wav_bytes = resample_wav_header(wav_bytes, original_sr, target_sr)
+                print(f"[Audio] File setelah konversi: {len(wav_bytes)} bytes")
+            else:
+                print(f"[Audio] Sample rate sudah standar, tidak dikonversi")
+
+        response = Response(
+            wav_bytes,
+            status=200,
+            content_type="audio/wav"
+        )
+        response.headers["Accept-Ranges"]               = "bytes"
+        response.headers["Cache-Control"]               = "public, max-age=3600"
+        response.headers["Content-Length"]              = str(len(wav_bytes))
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        return response
+
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+# ─── Daftar pasien ───────────────────────────────────
 @app.route("/api/pasien", methods=["GET"])
 def list_pasien():
     if not verify_token(request):
@@ -149,38 +277,52 @@ def list_pasien():
     try:
         sb  = get_supabase()
         res = sb.table("pemeriksaan").select("id_pasien, nama").execute()
+
         if not res.data or not isinstance(res.data, list):
             return jsonify([])
+
         seen = {}
         for row in res.data:
             pid = row["id_pasien"]
             if pid not in seen:
-                seen[pid] = {"id_pasien": pid, "nama": row["nama"],
-                             "jumlah_pemeriksaan": 0}
+                seen[pid] = {
+                    "id_pasien":          pid,
+                    "nama":               row["nama"],
+                    "jumlah_pemeriksaan": 0
+                }
             seen[pid]["jumlah_pemeriksaan"] += 1
+
         return jsonify(sorted(seen.values(), key=lambda x: x["nama"]))
+
     except Exception as e:
         import traceback; traceback.print_exc()
         return jsonify([])
 
+# ─── Detail pemeriksaan satu pasien ─────────────────
 @app.route("/api/pasien/<id_pasien>", methods=["GET"])
 def detail_pasien(id_pasien):
     if not verify_token(request):
         return jsonify({"error": "Unauthorized"}), 401
     try:
         sb  = get_supabase()
-        res = sb.table("pemeriksaan").select("*")\
+        res = sb.table("pemeriksaan")\
+                .select("*")\
                 .eq("id_pasien", id_pasien)\
                 .order("created_at", desc=True).execute()
+
         if not res.data or not isinstance(res.data, list):
             return jsonify([])
+
         rows = []
         for row in res.data:
             fn = row.get("file_name", "")
             if fn:
-                row["file_url"] = sb.storage.from_(BUCKET_NAME).get_public_url(fn)
+                # Gunakan proxy route agar sample rate dikonversi otomatis
+                row["file_url"] = f"/api/audio/{fn}"
             rows.append(row)
+
         return jsonify(rows)
+
     except Exception as e:
         import traceback; traceback.print_exc()
         return jsonify([])
