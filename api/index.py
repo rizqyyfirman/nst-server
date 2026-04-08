@@ -91,12 +91,12 @@ def login():
 @app.route("/api/upload", methods=["POST"])
 def upload():
     try:
-        nama           = request.form.get("nama",           "").strip()
-        usia           = request.form.get("usia",           "").strip()
-        id_pasien      = request.form.get("idPasien",       "").strip()
-        usia_kandungan = request.form.get("usiaKandungan",  "").strip()
-        tanggal        = request.form.get("tanggal",        "").strip()
-        avg_bpm        = float(request.form.get("avgBpm",   0))
+        nama           = request.form.get("nama",          "").strip()
+        usia           = request.form.get("usia",          "").strip()
+        id_pasien      = request.form.get("idPasien",      "").strip()
+        usia_kandungan = request.form.get("usiaKandungan", "").strip()
+        tanggal        = request.form.get("tanggal",       "").strip()
+        avg_bpm        = float(request.form.get("avgBpm",  0))
 
         if not nama or not id_pasien:
             return jsonify({"error": "Field nama dan idPasien wajib diisi"}), 400
@@ -147,6 +147,9 @@ def list_pasien():
         sb  = get_supabase()
         res = sb.table("pemeriksaan").select("id_pasien, nama").execute()
 
+        if not res.data or not isinstance(res.data, list):
+            return jsonify([])
+
         seen = {}
         for row in res.data:
             pid = row["id_pasien"]
@@ -159,8 +162,11 @@ def list_pasien():
             seen[pid]["jumlah_pemeriksaan"] += 1
 
         return jsonify(sorted(seen.values(), key=lambda x: x["nama"]))
+
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        import traceback
+        traceback.print_exc()
+        return jsonify([])
 
 # ─── Detail pemeriksaan satu pasien ──────────────────
 @app.route("/api/pasien/<id_pasien>", methods=["GET"])
@@ -175,6 +181,9 @@ def detail_pasien(id_pasien):
                 .order("created_at", desc=True)\
                 .execute()
 
+        if not res.data or not isinstance(res.data, list):
+            return jsonify([])
+
         rows = []
         for row in res.data:
             fn = row.get("file_name", "")
@@ -183,5 +192,8 @@ def detail_pasien(id_pasien):
             rows.append(row)
 
         return jsonify(rows)
+
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        import traceback
+        traceback.print_exc()
+        return jsonify([])

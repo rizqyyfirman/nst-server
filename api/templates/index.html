@@ -10,8 +10,7 @@
     --text: #1a1a1a; --text-muted: #6b7280;
     --primary: #7c3aed; --primary-light: #ede9fe;
     --primary-dark: #5b21b6; --danger: #dc2626;
-    --success: #059669; --radius: 12px;
-    --shadow: 0 1px 3px rgba(0,0,0,0.1);
+    --radius: 12px; --shadow: 0 1px 3px rgba(0,0,0,0.1);
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -20,7 +19,7 @@
   .page { display: none; }
   .page.active { display: flex; }
 
-  /* ── Login ── */
+  /* Login */
   #page-login {
     min-height: 100vh; align-items: center; justify-content: center;
     background: linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%);
@@ -34,11 +33,12 @@
   .login-logo h1 { font-size: 26px; color: var(--primary); font-weight: 700; }
   .login-logo p  { color: var(--text-muted); font-size: 14px; margin-top: 4px; }
   .form-group { margin-bottom: 16px; }
-  .form-group label { display: block; font-size: 13px; font-weight: 600;
-                      margin-bottom: 6px; }
+  .form-group label { display: block; font-size: 13px;
+                      font-weight: 600; margin-bottom: 6px; }
   .form-group input {
     width: 100%; padding: 10px 14px; border: 1.5px solid var(--border);
     border-radius: 8px; font-size: 15px; transition: border-color .2s;
+    background: white; color: var(--text);
   }
   .form-group input:focus { outline: none; border-color: var(--primary); }
   .btn-primary {
@@ -47,16 +47,16 @@
     cursor: pointer; transition: background .2s;
   }
   .btn-primary:hover { background: var(--primary-dark); }
-  .error-msg { color: var(--danger); font-size: 13px; margin-top: 10px;
-               text-align: center; min-height: 18px; }
+  .error-msg { color: var(--danger); font-size: 13px;
+               margin-top: 10px; text-align: center; min-height: 18px; }
 
-  /* ── Dashboard ── */
+  /* Dashboard */
   #page-dashboard { flex-direction: column; min-height: 100vh; }
   .topbar {
     background: var(--card); border-bottom: 1px solid var(--border);
     padding: 0 24px; height: 60px; display: flex;
     align-items: center; justify-content: space-between;
-    box-shadow: var(--shadow);
+    box-shadow: var(--shadow); position: sticky; top: 0; z-index: 10;
   }
   .topbar-title { font-size: 18px; font-weight: 700; color: var(--primary); }
   .topbar-user  { display: flex; align-items: center; gap: 10px;
@@ -69,10 +69,10 @@
   }
   .btn-logout:hover { border-color: var(--danger); color: var(--danger); }
 
-  .main-content { flex: 1; padding: 24px; max-width: 1100px;
-                  width: 100%; margin: 0 auto; }
+  .main-content { flex: 1; padding: 24px;
+                  max-width: 1100px; width: 100%; margin: 0 auto; }
 
-  /* ── Breadcrumb ── */
+  /* Breadcrumb */
   .breadcrumb { display: flex; align-items: center; gap: 8px;
                 font-size: 13px; color: var(--text-muted); margin-bottom: 20px; }
   .breadcrumb .crumb { cursor: pointer; transition: color .2s; }
@@ -80,12 +80,12 @@
   .breadcrumb .sep { color: var(--border); }
   .breadcrumb .current { color: var(--text); font-weight: 600; cursor: default; }
 
-  /* ── Panel header ── */
+  /* Panel header */
   .panel-header { margin-bottom: 20px; }
   .panel-header h2 { font-size: 22px; font-weight: 700; }
   .panel-header p  { font-size: 14px; color: var(--text-muted); margin-top: 4px; }
 
-  /* ── Pasien grid ── */
+  /* Pasien grid */
   .pasien-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
@@ -96,8 +96,10 @@
     border-radius: var(--radius); padding: 18px 20px;
     cursor: pointer; transition: all .2s;
   }
-  .pasien-card:hover { border-color: var(--primary);
-                       box-shadow: 0 4px 12px rgba(124,58,237,0.12); }
+  .pasien-card:hover {
+    border-color: var(--primary);
+    box-shadow: 0 4px 12px rgba(124,58,237,0.12);
+  }
   .pasien-card h3  { font-size: 15px; font-weight: 600; }
   .pasien-card .id { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
   .pasien-card .badge {
@@ -106,7 +108,7 @@
     font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: 20px;
   }
 
-  /* ── Pemeriksaan list ── */
+  /* Pemeriksaan list */
   .pem-list { display: flex; flex-direction: column; gap: 14px; }
   .pem-card {
     background: var(--card); border: 1.5px solid var(--border);
@@ -118,18 +120,20 @@
   }
   .pem-date { font-size: 16px; font-weight: 700; }
   .bpm-badge {
-    background: #ecfdf5; color: #065f46;
-    font-size: 13px; font-weight: 700; padding: 4px 12px; border-radius: 20px;
+    background: #ecfdf5; color: #065f46; font-size: 13px;
+    font-weight: 700; padding: 4px 12px; border-radius: 20px;
   }
   .pem-meta { display: flex; gap: 24px; flex-wrap: wrap; margin-bottom: 16px; }
   .pem-meta div { font-size: 13px; color: var(--text-muted); }
   .pem-meta strong { color: var(--text); display: block;
                      font-size: 14px; font-weight: 600; }
 
-  /* ── Audio Player ── */
+  /* Audio player */
   .audio-section { border-top: 1px solid var(--border); padding-top: 14px; }
-  .audio-label { font-size: 12px; font-weight: 600; color: var(--text-muted);
-                 text-transform: uppercase; letter-spacing: .5px; margin-bottom: 10px; }
+  .audio-label {
+    font-size: 12px; font-weight: 600; color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: .5px; margin-bottom: 10px;
+  }
   .audio-player {
     display: flex; align-items: center; gap: 12px;
     background: #f9fafb; border: 1px solid var(--border);
@@ -155,7 +159,7 @@
   .volume-wrap { display: flex; align-items: center; gap: 6px; }
   .volume-wrap input { width: 64px; accent-color: var(--primary); cursor: pointer; }
 
-  /* ── Loading / Empty ── */
+  /* Loading / Empty */
   .loading { text-align: center; padding: 40px; color: var(--text-muted); }
   .empty   { text-align: center; padding: 60px; color: var(--text-muted); }
   .spinner {
@@ -168,7 +172,7 @@
 </head>
 <body>
 
-<!-- ══ PAGE LOGIN ══════════════════════════════════════ -->
+<!-- LOGIN -->
 <div id="page-login" class="page active">
   <div class="login-card">
     <div class="login-logo">
@@ -177,11 +181,13 @@
     </div>
     <div class="form-group">
       <label>ID Admin</label>
-      <input type="text" id="login-id" placeholder="admin" autocomplete="username">
+      <input type="text" id="login-id" placeholder="admin"
+             autocomplete="username">
     </div>
     <div class="form-group">
       <label>Password</label>
       <input type="password" id="login-pw" placeholder="••••••••"
+             autocomplete="current-password"
              onkeydown="if(event.key==='Enter') doLogin()">
     </div>
     <button class="btn-primary" onclick="doLogin()">Masuk</button>
@@ -189,7 +195,7 @@
   </div>
 </div>
 
-<!-- ══ PAGE DASHBOARD ══════════════════════════════════ -->
+<!-- DASHBOARD -->
 <div id="page-dashboard" class="page">
   <div class="topbar">
     <span class="topbar-title">NST Doppler</span>
@@ -229,8 +235,8 @@
 </div>
 
 <script>
-const API = '';
-let TOKEN = localStorage.getItem('nst_token') || '';
+const API    = '';
+let   TOKEN  = localStorage.getItem('nst_token') || '';
 const audioMap = {};
 
 // ── Halaman ───────────────────────────────────────────
@@ -258,11 +264,17 @@ async function doLogin() {
   const id = document.getElementById('login-id').value.trim();
   const pw = document.getElementById('login-pw').value;
   document.getElementById('login-error').textContent = '';
+
+  if (!id || !pw) {
+    document.getElementById('login-error').textContent = 'ID dan password wajib diisi';
+    return;
+  }
+
   try {
     const r = await fetch('/api/login', {
-      method: 'POST',
+      method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: id, password: pw })
+      body:    JSON.stringify({ username: id, password: pw })
     });
     const d = await r.json();
     if (!r.ok) throw new Error(d.error || 'Login gagal');
@@ -282,8 +294,8 @@ function doLogout() {
 
 // ── Panel Daftar Pasien ───────────────────────────────
 async function showPanelPasien() {
-  document.getElementById('panel-pasien').style.display       = '';
-  document.getElementById('panel-pemeriksaan').style.display  = 'none';
+  document.getElementById('panel-pasien').style.display      = '';
+  document.getElementById('panel-pemeriksaan').style.display = 'none';
   setBreadcrumb([{ label: 'Daftar Pasien' }]);
 
   const grid = document.getElementById('pasien-grid');
@@ -294,7 +306,14 @@ async function showPanelPasien() {
       headers: { 'Authorization': 'Bearer ' + TOKEN }
     });
     if (r.status === 401) { doLogout(); return; }
+
     const data = await r.json();
+
+    // Pastikan data adalah array
+    if (!Array.isArray(data)) {
+      grid.innerHTML = `<div class="empty"><p>Error: ${data.error || 'Format data tidak valid'}</p></div>`;
+      return;
+    }
 
     document.getElementById('pasien-count-txt').textContent =
       `Total ${data.length} pasien terdaftar`;
@@ -312,6 +331,7 @@ async function showPanelPasien() {
         <span class="badge">${p.jumlah_pemeriksaan}× pemeriksaan</span>
       </div>
     `).join('');
+
   } catch (e) {
     grid.innerHTML = `<div class="empty"><p>Error: ${e.message}</p></div>`;
   }
@@ -327,7 +347,7 @@ async function showPanelPemeriksaan(idPasien, nama) {
   ]);
 
   document.getElementById('pem-pasien-name').textContent = nama;
-  document.getElementById('pem-pasien-meta').textContent = 'ID: ' + idPasien;
+  document.getElementById('pem-pasien-meta').textContent = 'ID Pasien: ' + idPasien;
 
   const list = document.getElementById('pem-list');
   list.innerHTML = '<div class="loading"><div class="spinner"></div>Memuat...</div>';
@@ -337,7 +357,13 @@ async function showPanelPemeriksaan(idPasien, nama) {
       headers: { 'Authorization': 'Bearer ' + TOKEN }
     });
     if (r.status === 401) { doLogout(); return; }
+
     const data = await r.json();
+
+    if (!Array.isArray(data)) {
+      list.innerHTML = `<div class="empty"><p>Error: ${data.error || 'Format data tidak valid'}</p></div>`;
+      return;
+    }
 
     if (data.length === 0) {
       list.innerHTML = '<div class="empty"><p>Belum ada pemeriksaan</p></div>';
@@ -351,14 +377,22 @@ async function showPanelPemeriksaan(idPasien, nama) {
           <span class="bpm-badge">♥ ${Math.round(pem.avg_bpm)} BPM</span>
         </div>
         <div class="pem-meta">
-          <div><div>Nama</div>
-               <strong>${esc(pem.nama)}</strong></div>
-          <div><div>Usia</div>
-               <strong>${esc(pem.usia)} tahun</strong></div>
-          <div><div>Usia Kandungan</div>
-               <strong>${esc(pem.usia_kandungan)} minggu</strong></div>
-          <div><div>ID Pasien</div>
-               <strong>${esc(pem.id_pasien)}</strong></div>
+          <div>
+            <div>Nama</div>
+            <strong>${esc(pem.nama)}</strong>
+          </div>
+          <div>
+            <div>Usia</div>
+            <strong>${esc(pem.usia)} tahun</strong>
+          </div>
+          <div>
+            <div>Usia Kandungan</div>
+            <strong>${esc(pem.usia_kandungan)} minggu</strong>
+          </div>
+          <div>
+            <div>ID Pasien</div>
+            <strong>${esc(pem.id_pasien)}</strong>
+          </div>
         </div>
         <div class="audio-section">
           <div class="audio-label">Rekaman Doppler</div>
@@ -366,6 +400,7 @@ async function showPanelPemeriksaan(idPasien, nama) {
         </div>
       </div>
     `).join('');
+
   } catch (e) {
     list.innerHTML = `<div class="empty"><p>Error: ${e.message}</p></div>`;
   }
@@ -374,7 +409,7 @@ async function showPanelPemeriksaan(idPasien, nama) {
 // ── Audio Player ──────────────────────────────────────
 function buildAudioPlayer(pem) {
   const audioUrl = pem.file_url || '';
-  const pid = 'aud-' + pem.id;
+  const pid      = 'aud-' + pem.id;
   return `
     <div class="audio-player">
       <button class="play-btn" id="btn-${pid}"
@@ -398,11 +433,11 @@ function buildAudioPlayer(pem) {
 
 function getOrCreateAudio(pid, url) {
   if (!audioMap[pid]) {
-    const a = new Audio(url);
-    a.preload = 'metadata';
-    a.volume  = 0.8;
-    a.addEventListener('timeupdate', () => updateProgress(pid, a));
-    a.addEventListener('ended',      () => resetPlayer(pid));
+    const a      = new Audio(url);
+    a.preload    = 'metadata';
+    a.volume     = 0.8;
+    a.addEventListener('timeupdate',     () => updateProgress(pid, a));
+    a.addEventListener('ended',          () => resetPlayer(pid));
     a.addEventListener('loadedmetadata', () => {
       const d = document.getElementById('dur-' + pid);
       if (d) d.textContent = fmtTime(a.duration);
@@ -413,6 +448,7 @@ function getOrCreateAudio(pid, url) {
 }
 
 function togglePlay(pid, url) {
+  // Pause semua audio lain
   Object.entries(audioMap).forEach(([k, a]) => {
     if (k !== pid && !a.paused) {
       a.pause();
@@ -420,8 +456,10 @@ function togglePlay(pid, url) {
       if (b) b.textContent = '▶';
     }
   });
+
   const a   = getOrCreateAudio(pid, url);
   const btn = document.getElementById('btn-' + pid);
+
   if (a.paused) {
     a.play().catch(e => console.warn('Play error:', e));
     btn.textContent = '⏸';
@@ -433,7 +471,8 @@ function togglePlay(pid, url) {
 
 function seekAudio(pid, val) {
   const a = audioMap[pid];
-  if (a && isFinite(a.duration)) a.currentTime = (val / 100) * a.duration;
+  if (a && isFinite(a.duration))
+    a.currentTime = (val / 100) * a.duration;
 }
 
 function setVolume(pid, val) {
@@ -446,7 +485,8 @@ function updateProgress(pid, a) {
   const cur  = document.getElementById('cur-'  + pid);
   if (prog && isFinite(a.duration))
     prog.value = (a.currentTime / a.duration) * 100;
-  if (cur) cur.textContent = fmtTime(a.currentTime);
+  if (cur)
+    cur.textContent = fmtTime(a.currentTime);
 }
 
 function resetPlayer(pid) {
@@ -467,18 +507,21 @@ function fmtTime(s) {
 
 function esc(str) {
   return String(str)
-    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
-    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-// ── Auto login jika token masih ada ──────────────────
+// ── Auto login jika token masih tersimpan ─────────────
 window.addEventListener('DOMContentLoaded', () => {
   if (TOKEN) {
     fetch('/api/pasien', {
       headers: { 'Authorization': 'Bearer ' + TOKEN }
     }).then(r => {
       if (r.ok) showDashboard();
-      else { TOKEN = ''; localStorage.removeItem('nst_token'); }
+      else {
+        TOKEN = '';
+        localStorage.removeItem('nst_token');
+      }
     }).catch(() => {});
   }
 });
