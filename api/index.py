@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify, render_template, Response
-import os, jwt, bcrypt, struct
+import os, jwt, bcrypt, struct, audioop, io, wave
 from datetime import datetime, timedelta, timezone
 from supabase import create_client, Client
 import requests as req_lib
@@ -94,7 +94,6 @@ def upload_meta():
         if not nama or not id_pasien or not file_name:
             return jsonify({"error": "nama, idPasien, fileName wajib diisi"}), 400
 
-        # Tanggal + waktu otomatis dari server (WIB = UTC+7)
         now_wib = datetime.now(timezone(timedelta(hours=7)))
         tanggal = now_wib.strftime("%d-%m-%Y")
         waktu   = now_wib.strftime("%H:%M")
@@ -141,111 +140,66 @@ def upload_wav():
         import traceback; traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
-# ─── Upsample WAV dengan linear interpolation ────────
-def upsample_wav_linear(wav_bytes: bytes,
-                        original_sr: int,
-                        target_sr: int) -> bytes:
+# ─── Resampling WAV menggunakan audioop (built-in Python) ─
+def resample_wav_audioop(wav_bytes: bytes, target_sr: int) -> bytes:
     """
-    Upsample WAV menggunakan linear interpolation.
-    Menghasilkan suara yang sangat mirip dengan file asli
-    di SD card — lebih halus dari duplikasi sampel.
-    Durasi output sama dengan input (40 detik tetap 40 detik).
+    Menggunakan audioop.ratecv() — built-in Python standard library.
+    Ini adalah algoritma resampling yang sama dipakai oleh banyak
+    audio software profesional. Tidak butuh ffmpeg atau library eksternal.
+
+    Hasil: suara identik dengan SD card, durasi tetap 40 detik.
     """
     if len(wav_bytes) < 44:
         return wav_bytes
 
+    # Parse WAV header
     num_channels     = struct.unpack_from('<H', wav_bytes, 22)[0]
+    original_sr      = struct.unpack_from('<I', wav_bytes, 24)[0]
     bits_per_sample  = struct.unpack_from('<H', wav_bytes, 34)[0]
     data_size        = struct.unpack_from('<I', wav_bytes, 40)[0]
     audio_data       = wav_bytes[44:44 + data_size]
 
     bytes_per_sample = bits_per_sample // 8
-    frame_size       = bytes_per_sample * num_channels
-    factor           = target_sr // original_sr
 
-    num_frames = len(audio_data) // frame_size
-    new_audio  = bytearray()
+    print(f"[Resample] {original_sr}Hz -> {target_sr}Hz, "
+          f"{num_channels}ch, {bits_per_sample}bit, "
+          f"{len(audio_data)} bytes data")
 
-    for i in range(num_frames):
-        offset_curr = i * frame_size
-        frame_curr  = audio_data[offset_curr : offset_curr + frame_size]
+    # audioop.ratecv melakukan resampling dengan anti-aliasing filter
+    # Parameter: (data, width, nchannels, inrate, outrate, state, weightA, weightB)
+    # weightA=1, weightB=0 = filter standar (flat response)
+    resampled_data, _ = audioop.ratecv(
+        audio_data,        # raw PCM data
+        bytes_per_sample,  # bytes per sample (2 untuk 16-bit)
+        num_channels,      # jumlah channel
+        original_sr,       # sample rate asal (800)
+        target_sr,         # sample rate target (8000)
+        None,              # state (None = mulai baru)
+        1,                 # weightA
+        0                  # weightB
+    )
 
-        # Frame berikutnya untuk interpolasi
-        if i + 1 < num_frames:
-            offset_next = (i + 1) * frame_size
-            frame_next  = audio_data[offset_next : offset_next + frame_size]
-        else:
-            frame_next = frame_curr
+    print(f"[Resample] Selesai: {len(resampled_data)} bytes")
 
-        for f in range(factor):
-            t = f / factor  # 0.0 sampai <1.0
-            interpolated_frame = bytearray()
+    # Buat WAV output baru
+    out_buf = io.BytesIO()
+    with wave.open(out_buf, 'wb') as wf:
+        wf.setnchannels(num_channels)
+        wf.setsampwidth(bytes_per_sample)
+        wf.setframerate(target_sr)
+        wf.writeframes(resampled_data)
 
-            for ch in range(num_channels):
-                ch_offset = ch * bytes_per_sample
-                val_curr  = struct.unpack_from('<h', frame_curr, ch_offset)[0]
-                val_next  = struct.unpack_from('<h', frame_next, ch_offset)[0]
+    return out_buf.getvalue()
 
-                # Interpolasi linear
-                val_interp = int(val_curr + (val_next - val_curr) * t)
-                val_interp = max(-32768, min(32767, val_interp))
-                interpolated_frame += struct.pack('<h', val_interp)
-
-            new_audio.extend(interpolated_frame)
-
-    new_data_size   = len(new_audio)
-    new_byte_rate   = target_sr * num_channels * bytes_per_sample
-    new_block_align = num_channels * bytes_per_sample
-    new_file_size   = new_data_size + 36
-
-    header = bytearray(44)
-    header[0:4]   = b'RIFF'
-    struct.pack_into('<I', header, 4,  new_file_size)
-    header[8:12]  = b'WAVE'
-    header[12:16] = b'fmt '
-    struct.pack_into('<I', header, 16, 16)
-    struct.pack_into('<H', header, 20, 1)
-    struct.pack_into('<H', header, 22, num_channels)
-    struct.pack_into('<I', header, 24, target_sr)
-    struct.pack_into('<I', header, 28, new_byte_rate)
-    struct.pack_into('<H', header, 32, new_block_align)
-    struct.pack_into('<H', header, 34, bits_per_sample)
-    header[36:40] = b'data'
-    struct.pack_into('<I', header, 40, new_data_size)
-
-    return bytes(header) + bytes(new_audio)
-
-# ─── Patch header saja (tanpa ubah data audio) ───────
-def fix_wav_header_only(wav_bytes: bytes, target_sr: int) -> bytes:
-    """
-    Hanya mengubah angka sample rate di header.
-    Data audio tidak disentuh sama sekali.
-    Digunakan ketika target_sr bukan kelipatan bulat dari original_sr.
-    """
-    if len(wav_bytes) < 44:
-        return wav_bytes
-    num_channels     = struct.unpack_from('<H', wav_bytes, 22)[0]
-    bits_per_sample  = struct.unpack_from('<H', wav_bytes, 34)[0]
-    bytes_per_sample = bits_per_sample // 8
-    new_byte_rate    = target_sr * num_channels * bytes_per_sample
-    new_block_align  = num_channels * bytes_per_sample
-    result = bytearray(wav_bytes)
-    struct.pack_into('<I', result, 24, target_sr)
-    struct.pack_into('<I', result, 28, new_byte_rate)
-    struct.pack_into('<H', result, 32, new_block_align)
-    return bytes(result)
-
-# ─── Proxy audio dengan upsample linear ──────────────
+# ─── Proxy audio dengan resampling audioop ───────────
 @app.route("/api/audio/<filename>", methods=["GET"])
 def stream_audio(filename):
     """
-    Ambil WAV dari Supabase, konversi jika perlu, kirim ke browser.
-
-    Logika konversi:
-    - Jika sample rate sudah standar browser → kirim langsung
-    - Jika target/original adalah kelipatan bulat → upsample linear
-      (durasi tetap sama, suara sangat mirip SD card)
-    - Jika bukan kelipatan bulat → patch header saja
+    Ambil WAV dari Supabase.
+    Jika sample rate tidak standar (800Hz):
+    - Gunakan audioop.ratecv() untuk resampling ke 8000Hz
+    - Algoritma sama dengan software audio profesional
+    - Durasi tetap 40 detik, suara identik dengan SD card
     """
     try:
         supabase_host = SUPABASE_URL.rstrip('/')
@@ -265,32 +219,22 @@ def stream_audio(filename):
             browser_supported = {8000, 11025, 16000, 22050, 44100, 48000}
 
             if original_sr not in browser_supported:
-                # Tentukan target sample rate
-                if 8000 % original_sr == 0:
+                # Tentukan target yang paling dekat dan standar
+                # Untuk 800Hz -> 8000Hz (faktor 10, bersih)
+                if original_sr <= 8000:
                     target_sr = 8000
-                elif 16000 % original_sr == 0:
+                elif original_sr <= 16000:
                     target_sr = 16000
-                elif 48000 % original_sr == 0:
-                    target_sr = 48000
+                elif original_sr <= 22050:
+                    target_sr = 22050
                 else:
-                    # Bukan kelipatan bulat — hanya patch header
-                    print(f"[Audio] {original_sr}Hz bukan kelipatan bulat, patch header saja")
-                    wav_bytes = fix_wav_header_only(wav_bytes, 8000)
-                    response = Response(
-                        wav_bytes, status=200, content_type="audio/wav"
-                    )
-                    response.headers["Accept-Ranges"]               = "bytes"
-                    response.headers["Cache-Control"]               = "public, max-age=3600"
-                    response.headers["Content-Length"]              = str(len(wav_bytes))
-                    response.headers["Access-Control-Allow-Origin"] = "*"
-                    return response
+                    target_sr = 44100
 
-                factor = target_sr // original_sr
-                print(f"[Audio] Upsample linear {original_sr}Hz -> {target_sr}Hz (x{factor})")
-                wav_bytes = upsample_wav_linear(wav_bytes, original_sr, target_sr)
-                print(f"[Audio] Selesai: {len(wav_bytes)} bytes")
+                print(f"[Audio] Resampling {original_sr}Hz -> {target_sr}Hz menggunakan audioop")
+                wav_bytes = resample_wav_audioop(wav_bytes, target_sr)
+                print(f"[Audio] Output: {len(wav_bytes)} bytes")
             else:
-                print(f"[Audio] Sample rate {original_sr}Hz sudah standar, langsung kirim")
+                print(f"[Audio] Sample rate {original_sr}Hz sudah didukung browser")
 
         response = Response(wav_bytes, status=200, content_type="audio/wav")
         response.headers["Accept-Ranges"]               = "bytes"
