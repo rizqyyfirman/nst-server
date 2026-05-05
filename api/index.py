@@ -1,8 +1,18 @@
 from flask import Flask, request, jsonify, render_template, Response
-import os, jwt, bcrypt, struct, audioop, io, wave
+import os, jwt, bcrypt, struct, io, wave
 from datetime import datetime, timedelta, timezone
 from supabase import create_client, Client
 import requests as req_lib
+
+# audioop tersedia di Python <= 3.12
+# Fallback ke interpolasi linear jika tidak tersedia
+try:
+    import audioop
+    HAS_AUDIOOP = True
+    print("[AUDIO] audioop tersedia — resampling berkualitas tinggi")
+except ImportError:
+    HAS_AUDIOOP = False
+    print("[AUDIO] audioop tidak tersedia — pakai interpolasi linear")
 
 app = Flask(__name__, template_folder="templates")
 
@@ -60,7 +70,8 @@ def health():
         "status":        "ok",
         "supabase_url":  SUPABASE_URL[:30] + "..." if SUPABASE_URL else "NOT SET",
         "supabase_key":  "SET" if SUPABASE_KEY else "NOT SET",
-        "admin_pw_hash": "SET" if ADMIN_PW_HASH else "NOT SET"
+        "admin_pw_hash": "SET" if ADMIN_PW_HASH else "NOT SET",
+        "audioop":       "available" if HAS_AUDIOOP else "NOT available (fallback linear)"
     })
 
 @app.route("/api/login", methods=["POST"])
@@ -79,7 +90,7 @@ def login():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# ─── Upload metadata — tanggal & waktu otomatis WIB ──
+# ─── Upload metadata ─────────────────────────────────
 @app.route("/api/upload/meta", methods=["POST"])
 def upload_meta():
     try:
@@ -117,7 +128,7 @@ def upload_meta():
         import traceback; traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
-# ─── Upload WAV binary ───────────────────────────────
+# ─── Upload WAV ──────────────────────────────────────
 @app.route("/api/upload/wav", methods=["POST"])
 def upload_wav():
     try:
@@ -140,72 +151,102 @@ def upload_wav():
         import traceback; traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
-# ─── Resampling WAV menggunakan audioop (built-in Python) ─
-def resample_wav_audioop(wav_bytes: bytes, target_sr: int) -> bytes:
+# ─── Resampling menggunakan audioop (Python <= 3.12) ──
+def resample_with_audioop(wav_bytes: bytes, target_sr: int) -> bytes:
     """
-    Menggunakan audioop.ratecv() — built-in Python standard library.
-    Ini adalah algoritma resampling yang sama dipakai oleh banyak
-    audio software profesional. Tidak butuh ffmpeg atau library eksternal.
-
-    Hasil: suara identik dengan SD card, durasi tetap 40 detik.
+    audioop.ratecv() — algoritma resampling dengan anti-aliasing filter.
+    Kualitas terbaik, identik dengan software audio profesional.
     """
-    if len(wav_bytes) < 44:
-        return wav_bytes
-
-    # Parse WAV header
-    num_channels     = struct.unpack_from('<H', wav_bytes, 22)[0]
-    original_sr      = struct.unpack_from('<I', wav_bytes, 24)[0]
-    bits_per_sample  = struct.unpack_from('<H', wav_bytes, 34)[0]
-    data_size        = struct.unpack_from('<I', wav_bytes, 40)[0]
-    audio_data       = wav_bytes[44:44 + data_size]
-
+    num_channels    = struct.unpack_from('<H', wav_bytes, 22)[0]
+    original_sr     = struct.unpack_from('<I', wav_bytes, 24)[0]
+    bits_per_sample = struct.unpack_from('<H', wav_bytes, 34)[0]
+    data_size       = struct.unpack_from('<I', wav_bytes, 40)[0]
+    audio_data      = wav_bytes[44:44 + data_size]
     bytes_per_sample = bits_per_sample // 8
 
-    print(f"[Resample] {original_sr}Hz -> {target_sr}Hz, "
-          f"{num_channels}ch, {bits_per_sample}bit, "
-          f"{len(audio_data)} bytes data")
+    print(f"[audioop] {original_sr}Hz -> {target_sr}Hz, "
+          f"{len(audio_data)} bytes")
 
-    # audioop.ratecv melakukan resampling dengan anti-aliasing filter
-    # Parameter: (data, width, nchannels, inrate, outrate, state, weightA, weightB)
-    # weightA=1, weightB=0 = filter standar (flat response)
-    resampled_data, _ = audioop.ratecv(
-        audio_data,        # raw PCM data
-        bytes_per_sample,  # bytes per sample (2 untuk 16-bit)
-        num_channels,      # jumlah channel
-        original_sr,       # sample rate asal (800)
-        target_sr,         # sample rate target (8000)
-        None,              # state (None = mulai baru)
-        1,                 # weightA
-        0                  # weightB
+    resampled, _ = audioop.ratecv(
+        audio_data,
+        bytes_per_sample,
+        num_channels,
+        original_sr,
+        target_sr,
+        None, 1, 0
     )
 
-    print(f"[Resample] Selesai: {len(resampled_data)} bytes")
-
-    # Buat WAV output baru
-    out_buf = io.BytesIO()
-    with wave.open(out_buf, 'wb') as wf:
+    out = io.BytesIO()
+    with wave.open(out, 'wb') as wf:
         wf.setnchannels(num_channels)
         wf.setsampwidth(bytes_per_sample)
         wf.setframerate(target_sr)
-        wf.writeframes(resampled_data)
+        wf.writeframes(resampled)
 
-    return out_buf.getvalue()
+    result = out.getvalue()
+    print(f"[audioop] Selesai: {len(result)} bytes")
+    return result
 
-# ─── Proxy audio dengan resampling audioop ───────────
+# ─── Fallback: interpolasi linear (Python >= 3.13) ────
+def resample_linear(wav_bytes: bytes, target_sr: int) -> bytes:
+    """
+    Fallback jika audioop tidak tersedia.
+    Kualitas lebih rendah tapi masih lebih baik dari duplikasi.
+    """
+    num_channels    = struct.unpack_from('<H', wav_bytes, 22)[0]
+    original_sr     = struct.unpack_from('<I', wav_bytes, 24)[0]
+    bits_per_sample = struct.unpack_from('<H', wav_bytes, 34)[0]
+    data_size       = struct.unpack_from('<I', wav_bytes, 40)[0]
+    audio_data      = wav_bytes[44:44 + data_size]
+    bytes_per_sample = bits_per_sample // 8
+    frame_size      = bytes_per_sample * num_channels
+    factor          = target_sr // original_sr
+    num_frames      = len(audio_data) // frame_size
+    new_audio       = bytearray()
+
+    for i in range(num_frames):
+        off_c  = i * frame_size
+        fc     = audio_data[off_c:off_c + frame_size]
+        off_n  = (i+1) * frame_size
+        fn     = audio_data[off_n:off_n + frame_size] if i+1 < num_frames else fc
+        for f in range(factor):
+            t   = f / factor
+            frm = bytearray()
+            for ch in range(num_channels):
+                o   = ch * bytes_per_sample
+                vc  = struct.unpack_from('<h', fc, o)[0]
+                vn  = struct.unpack_from('<h', fn, o)[0]
+                vi  = max(-32768, min(32767, int(vc + (vn - vc) * t)))
+                frm += struct.pack('<h', vi)
+            new_audio.extend(frm)
+
+    new_data_size   = len(new_audio)
+    new_byte_rate   = target_sr * num_channels * bytes_per_sample
+    new_block_align = num_channels * bytes_per_sample
+
+    header = bytearray(44)
+    header[0:4]  = b'RIFF'
+    struct.pack_into('<I', header, 4,  new_data_size + 36)
+    header[8:12]  = b'WAVE'
+    header[12:16] = b'fmt '
+    struct.pack_into('<I', header, 16, 16)
+    struct.pack_into('<H', header, 20, 1)
+    struct.pack_into('<H', header, 22, num_channels)
+    struct.pack_into('<I', header, 24, target_sr)
+    struct.pack_into('<I', header, 28, new_byte_rate)
+    struct.pack_into('<H', header, 32, new_block_align)
+    struct.pack_into('<H', header, 34, bits_per_sample)
+    header[36:40] = b'data'
+    struct.pack_into('<I', header, 40, new_data_size)
+
+    return bytes(header) + bytes(new_audio)
+
+# ─── Proxy audio ─────────────────────────────────────
 @app.route("/api/audio/<filename>", methods=["GET"])
 def stream_audio(filename):
-    """
-    Ambil WAV dari Supabase.
-    Jika sample rate tidak standar (800Hz):
-    - Gunakan audioop.ratecv() untuk resampling ke 8000Hz
-    - Algoritma sama dengan software audio profesional
-    - Durasi tetap 40 detik, suara identik dengan SD card
-    """
     try:
-        supabase_host = SUPABASE_URL.rstrip('/')
-        url = f"{supabase_host}/storage/v1/object/public/{BUCKET_NAME}/{filename}"
-
-        r = req_lib.get(url, timeout=30)
+        url = f"{SUPABASE_URL.rstrip('/')}/storage/v1/object/public/{BUCKET_NAME}/{filename}"
+        r   = req_lib.get(url, timeout=30)
         if r.status_code != 200:
             return jsonify({"error": f"File tidak ditemukan: {filename}"}), 404
 
@@ -213,28 +254,36 @@ def stream_audio(filename):
         print(f"[Audio] {filename}: {len(wav_bytes)} bytes")
 
         if len(wav_bytes) >= 28:
-            original_sr = struct.unpack_from('<I', wav_bytes, 24)[0]
-            print(f"[Audio] Sample rate asli: {original_sr} Hz")
+            original_sr     = struct.unpack_from('<I', wav_bytes, 24)[0]
+            browser_ok      = {8000, 11025, 16000, 22050, 44100, 48000}
 
-            browser_supported = {8000, 11025, 16000, 22050, 44100, 48000}
+            print(f"[Audio] Sample rate: {original_sr} Hz")
 
-            if original_sr not in browser_supported:
-                # Tentukan target yang paling dekat dan standar
-                # Untuk 800Hz -> 8000Hz (faktor 10, bersih)
+            if original_sr not in browser_ok:
+                # Pilih target terbaik
                 if original_sr <= 8000:
                     target_sr = 8000
                 elif original_sr <= 16000:
                     target_sr = 16000
-                elif original_sr <= 22050:
-                    target_sr = 22050
                 else:
-                    target_sr = 44100
+                    target_sr = 22050
 
-                print(f"[Audio] Resampling {original_sr}Hz -> {target_sr}Hz menggunakan audioop")
-                wav_bytes = resample_wav_audioop(wav_bytes, target_sr)
-                print(f"[Audio] Output: {len(wav_bytes)} bytes")
-            else:
-                print(f"[Audio] Sample rate {original_sr}Hz sudah didukung browser")
+                # Gunakan audioop jika tersedia, fallback ke linear
+                if HAS_AUDIOOP:
+                    wav_bytes = resample_with_audioop(wav_bytes, target_sr)
+                else:
+                    # Pastikan factor adalah bilangan bulat
+                    if target_sr % original_sr == 0:
+                        wav_bytes = resample_linear(wav_bytes, target_sr)
+                    else:
+                        # Patch header saja sebagai last resort
+                        result = bytearray(wav_bytes)
+                        bps = struct.unpack_from('<H', wav_bytes, 34)[0] // 8
+                        ch  = struct.unpack_from('<H', wav_bytes, 22)[0]
+                        struct.pack_into('<I', result, 24, target_sr)
+                        struct.pack_into('<I', result, 28, target_sr * ch * bps)
+                        struct.pack_into('<H', result, 32, ch * bps)
+                        wav_bytes = bytes(result)
 
         response = Response(wav_bytes, status=200, content_type="audio/wav")
         response.headers["Accept-Ranges"]               = "bytes"
@@ -261,26 +310,22 @@ def list_pasien():
         for row in res.data:
             pid = row["id_pasien"]
             if pid not in seen:
-                seen[pid] = {
-                    "id_pasien":          pid,
-                    "nama":               row["nama"],
-                    "jumlah_pemeriksaan": 0
-                }
+                seen[pid] = {"id_pasien": pid, "nama": row["nama"],
+                             "jumlah_pemeriksaan": 0}
             seen[pid]["jumlah_pemeriksaan"] += 1
         return jsonify(sorted(seen.values(), key=lambda x: x["nama"]))
     except Exception as e:
         import traceback; traceback.print_exc()
         return jsonify([])
 
-# ─── Detail pemeriksaan satu pasien ─────────────────
+# ─── Detail pemeriksaan ──────────────────────────────
 @app.route("/api/pasien/<id_pasien>", methods=["GET"])
 def detail_pasien(id_pasien):
     if not verify_token(request):
         return jsonify({"error": "Unauthorized"}), 401
     try:
         sb  = get_supabase()
-        res = sb.table("pemeriksaan")\
-                .select("*")\
+        res = sb.table("pemeriksaan").select("*")\
                 .eq("id_pasien", id_pasien)\
                 .order("created_at", desc=True).execute()
         if not res.data or not isinstance(res.data, list):
