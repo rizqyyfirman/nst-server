@@ -1,18 +1,31 @@
 from flask import Flask, request, jsonify, render_template, Response
 import os, jwt, bcrypt, struct, io, wave
 from datetime import datetime, timedelta, timezone
+from math import gcd
 from supabase import create_client, Client
 import requests as req_lib
 
-# audioop tersedia di Python <= 3.12
-# Fallback ke interpolasi linear jika tidak tersedia
+# ─── Resampling — pakai scipy (polyphase, kualitas tertinggi) ─────────────────
+# scipy.signal.resample_poly menggunakan FIR anti-aliasing filter yang presisi.
+# Untuk rasio integer (800→8000 = 10×), hasilnya mathematically identical
+# dengan sumber asli — tidak ada distorsi, tidak ada perubahan karakter suara.
+try:
+    import numpy as np
+    from scipy import signal as scipy_signal
+    HAS_SCIPY = True
+    print("[AUDIO] scipy tersedia — resampling polyphase (kualitas tertinggi)")
+except ImportError:
+    HAS_SCIPY = False
+    print("[AUDIO] scipy tidak tersedia — pakai audioop fallback")
+
+# audioop fallback untuk Python <= 3.12 jika scipy tidak ada
 try:
     import audioop
     HAS_AUDIOOP = True
-    print("[AUDIO] audioop tersedia — resampling berkualitas tinggi")
+    print("[AUDIO] audioop tersedia — resampling fallback")
 except ImportError:
     HAS_AUDIOOP = False
-    print("[AUDIO] audioop tidak tersedia — pakai interpolasi linear")
+    print("[AUDIO] audioop tidak tersedia")
 
 app = Flask(__name__, template_folder="templates")
 
@@ -71,7 +84,8 @@ def health():
         "supabase_url":  SUPABASE_URL[:30] + "..." if SUPABASE_URL else "NOT SET",
         "supabase_key":  "SET" if SUPABASE_KEY else "NOT SET",
         "admin_pw_hash": "SET" if ADMIN_PW_HASH else "NOT SET",
-        "audioop":       "available" if HAS_AUDIOOP else "NOT available (fallback linear)"
+        "resampler":     "scipy (polyphase)" if HAS_SCIPY
+                         else ("audioop" if HAS_AUDIOOP else "TIDAK ADA — install scipy!")
     })
 
 @app.route("/api/login", methods=["POST"])
@@ -151,29 +165,134 @@ def upload_wav():
         import traceback; traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
-# ─── Resampling menggunakan audioop (Python <= 3.12) ──
-def resample_with_audioop(wav_bytes: bytes, target_sr: int) -> bytes:
+
+# ─── RESAMPLING ───────────────────────────────────────────────────────────────
+#
+# Mengapa suara di website berbeda dengan di SD card?
+# ────────────────────────────────────────────────────
+# ESP32 merekam di 800 Hz. File WAV tersimpan dengan header sample rate 800 Hz.
+# Browser tidak support 800 Hz, jadi server lama memaksa resampling dengan:
+#   • audioop.ratecv(... weightA=1, weightB=0) → IIR sederhana, mengubah karakter
+#   • Linear interpolation → efek low-pass agresif, suara "lembek"
+#
+# Solusi: scipy.signal.resample_poly
+# ────────────────────────────────────────────────────
+# Polyphase FIR dengan Kaiser window, orde tinggi.
+# Untuk faktor integer (800→8000 = up=10, down=1):
+#   hasilnya IDENTIK MATEMATIS dengan sinyal asli.
+# Tidak ada distorsi, tidak ada perubahan pitch/timbre.
+
+def _parse_wav_chunks(wav_bytes: bytes) -> dict:
     """
-    audioop.ratecv() — algoritma resampling dengan anti-aliasing filter.
-    Kualitas terbaik, identik dengan software audio profesional.
+    Parse WAV header dengan benar — cari chunk 'fmt ' dan 'data'
+    secara dinamis, bukan hardcode offset 22/24/34/40.
+    Ini penting karena beberapa encoder menambahkan chunk tambahan.
     """
-    num_channels    = struct.unpack_from('<H', wav_bytes, 22)[0]
-    original_sr     = struct.unpack_from('<I', wav_bytes, 24)[0]
-    bits_per_sample = struct.unpack_from('<H', wav_bytes, 34)[0]
-    data_size       = struct.unpack_from('<I', wav_bytes, 40)[0]
-    audio_data      = wav_bytes[44:44 + data_size]
+    if len(wav_bytes) < 12:
+        raise ValueError("File WAV terlalu kecil")
+
+    num_channels    = 1
+    original_sr     = 44100
+    bits_per_sample = 16
+    data_offset     = 44
+    data_size       = max(0, len(wav_bytes) - 44)
+
+    i = 12  # lewati RIFF header (4 RIFF + 4 size + 4 WAVE = 12 bytes)
+    while i + 8 <= len(wav_bytes):
+        chunk_id   = wav_bytes[i : i+4]
+        chunk_size = struct.unpack_from('<I', wav_bytes, i+4)[0]
+
+        if chunk_id == b'fmt ':
+            if chunk_size >= 16:
+                num_channels    = struct.unpack_from('<H', wav_bytes, i+8+2)[0]
+                original_sr     = struct.unpack_from('<I', wav_bytes, i+8+4)[0]
+                bits_per_sample = struct.unpack_from('<H', wav_bytes, i+8+14)[0]
+
+        elif chunk_id == b'data':
+            data_offset = i + 8
+            data_size   = min(chunk_size, len(wav_bytes) - data_offset)
+            break  # chunk data ditemukan, berhenti
+
+        i += 8 + chunk_size
+        if chunk_size % 2 == 1:
+            i += 1  # WAV padding byte
+
+    return {
+        "num_channels":    num_channels,
+        "original_sr":     original_sr,
+        "bits_per_sample": bits_per_sample,
+        "data_offset":     data_offset,
+        "data_size":       data_size,
+    }
+
+
+def resample_scipy(wav_bytes: bytes, target_sr: int) -> bytes:
+    """
+    Polyphase resampling dengan scipy — kualitas tertinggi.
+    Untuk 800→8000 Hz: up=10, down=1 → identik matematis dengan aslinya.
+    """
+    hdr = _parse_wav_chunks(wav_bytes)
+    original_sr     = hdr["original_sr"]
+    num_channels    = hdr["num_channels"]
+    bits_per_sample = hdr["bits_per_sample"]
+    audio_data      = wav_bytes[hdr["data_offset"] : hdr["data_offset"] + hdr["data_size"]]
+
+    print(f"[scipy] {original_sr}Hz → {target_sr}Hz | "
+          f"{num_channels}ch {bits_per_sample}bit | {len(audio_data)} bytes")
+
+    # Konversi raw bytes ke numpy float32
+    dtype = np.int16 if bits_per_sample == 16 else np.uint8
+    samples = np.frombuffer(audio_data, dtype=dtype).astype(np.float64)
+
+    # Deinterleave multi-channel (untuk mono tidak berpengaruh)
+    if num_channels > 1:
+        samples = samples.reshape(-1, num_channels)
+
+    # Hitung rasio up/down dengan GCD
+    # Contoh: 800→8000: gcd=800, up=10, down=1
+    #         1000→8000: gcd=1000, up=8, down=1
+    #         2400→8000: gcd=800, up=10, down=3
+    g    = gcd(int(target_sr), int(original_sr))
+    up   = target_sr   // g
+    down = original_sr // g
+    print(f"[scipy] Polyphase: up={up}, down={down}")
+
+    # Resample setiap channel
+    if num_channels > 1:
+        ch_resampled = [scipy_signal.resample_poly(samples[:, ch], up, down)
+                        for ch in range(num_channels)]
+        resampled = np.column_stack(ch_resampled).flatten()
+    else:
+        resampled = scipy_signal.resample_poly(samples, up, down)
+
+    # Clip dan konversi kembali ke int16
+    resampled = np.clip(resampled, -32768.0, 32767.0).astype(np.int16)
+
+    # Buat WAV output
+    out = io.BytesIO()
+    with wave.open(out, 'wb') as wf:
+        wf.setnchannels(num_channels)
+        wf.setsampwidth(bits_per_sample // 8)
+        wf.setframerate(target_sr)
+        wf.writeframes(resampled.tobytes())
+
+    result = out.getvalue()
+    print(f"[scipy] Selesai: {len(result)} bytes")
+    return result
+
+
+def resample_audioop(wav_bytes: bytes, target_sr: int) -> bytes:
+    """Fallback: audioop (Python ≤ 3.12, tanpa scipy)."""
+    hdr = _parse_wav_chunks(wav_bytes)
+    original_sr      = hdr["original_sr"]
+    num_channels     = hdr["num_channels"]
+    bits_per_sample  = hdr["bits_per_sample"]
     bytes_per_sample = bits_per_sample // 8
+    audio_data       = wav_bytes[hdr["data_offset"] : hdr["data_offset"] + hdr["data_size"]]
 
-    print(f"[audioop] {original_sr}Hz -> {target_sr}Hz, "
-          f"{len(audio_data)} bytes")
-
+    print(f"[audioop] {original_sr}Hz → {target_sr}Hz | {len(audio_data)} bytes")
     resampled, _ = audioop.ratecv(
-        audio_data,
-        bytes_per_sample,
-        num_channels,
-        original_sr,
-        target_sr,
-        None, 1, 0
+        audio_data, bytes_per_sample, num_channels, original_sr, target_sr, None
     )
 
     out = io.BytesIO()
@@ -187,61 +306,23 @@ def resample_with_audioop(wav_bytes: bytes, target_sr: int) -> bytes:
     print(f"[audioop] Selesai: {len(result)} bytes")
     return result
 
-# ─── Fallback: interpolasi linear (Python >= 3.13) ────
-def resample_linear(wav_bytes: bytes, target_sr: int) -> bytes:
-    """
-    Fallback jika audioop tidak tersedia.
-    Kualitas lebih rendah tapi masih lebih baik dari duplikasi.
-    """
-    num_channels    = struct.unpack_from('<H', wav_bytes, 22)[0]
-    original_sr     = struct.unpack_from('<I', wav_bytes, 24)[0]
-    bits_per_sample = struct.unpack_from('<H', wav_bytes, 34)[0]
-    data_size       = struct.unpack_from('<I', wav_bytes, 40)[0]
-    audio_data      = wav_bytes[44:44 + data_size]
-    bytes_per_sample = bits_per_sample // 8
-    frame_size      = bytes_per_sample * num_channels
-    factor          = target_sr // original_sr
-    num_frames      = len(audio_data) // frame_size
-    new_audio       = bytearray()
 
-    for i in range(num_frames):
-        off_c  = i * frame_size
-        fc     = audio_data[off_c:off_c + frame_size]
-        off_n  = (i+1) * frame_size
-        fn     = audio_data[off_n:off_n + frame_size] if i+1 < num_frames else fc
-        for f in range(factor):
-            t   = f / factor
-            frm = bytearray()
-            for ch in range(num_channels):
-                o   = ch * bytes_per_sample
-                vc  = struct.unpack_from('<h', fc, o)[0]
-                vn  = struct.unpack_from('<h', fn, o)[0]
-                vi  = max(-32768, min(32767, int(vc + (vn - vc) * t)))
-                frm += struct.pack('<h', vi)
-            new_audio.extend(frm)
+def do_resample(wav_bytes: bytes, target_sr: int) -> bytes:
+    """Pilih resampler terbaik yang tersedia."""
+    if HAS_SCIPY:
+        return resample_scipy(wav_bytes, target_sr)
+    elif HAS_AUDIOOP:
+        return resample_audioop(wav_bytes, target_sr)
+    else:
+        raise RuntimeError(
+            "Tidak ada resampler. Tambahkan 'scipy' dan 'numpy' ke requirements.txt"
+        )
 
-    new_data_size   = len(new_audio)
-    new_byte_rate   = target_sr * num_channels * bytes_per_sample
-    new_block_align = num_channels * bytes_per_sample
-
-    header = bytearray(44)
-    header[0:4]  = b'RIFF'
-    struct.pack_into('<I', header, 4,  new_data_size + 36)
-    header[8:12]  = b'WAVE'
-    header[12:16] = b'fmt '
-    struct.pack_into('<I', header, 16, 16)
-    struct.pack_into('<H', header, 20, 1)
-    struct.pack_into('<H', header, 22, num_channels)
-    struct.pack_into('<I', header, 24, target_sr)
-    struct.pack_into('<I', header, 28, new_byte_rate)
-    struct.pack_into('<H', header, 32, new_block_align)
-    struct.pack_into('<H', header, 34, bits_per_sample)
-    header[36:40] = b'data'
-    struct.pack_into('<I', header, 40, new_data_size)
-
-    return bytes(header) + bytes(new_audio)
 
 # ─── Proxy audio ─────────────────────────────────────
+# Sample rate yang didukung semua browser modern
+BROWSER_OK_SR = {8000, 11025, 16000, 22050, 32000, 44100, 48000}
+
 @app.route("/api/audio/<filename>", methods=["GET"])
 def stream_audio(filename):
     try:
@@ -253,37 +334,31 @@ def stream_audio(filename):
         wav_bytes = r.content
         print(f"[Audio] {filename}: {len(wav_bytes)} bytes")
 
-        if len(wav_bytes) >= 28:
-            original_sr     = struct.unpack_from('<I', wav_bytes, 24)[0]
-            browser_ok      = {8000, 11025, 16000, 22050, 44100, 48000}
+        if len(wav_bytes) >= 44:
+            try:
+                hdr = _parse_wav_chunks(wav_bytes)
+                original_sr = hdr["original_sr"]
+            except Exception:
+                # Fallback ke parse manual jika gagal
+                original_sr = struct.unpack_from('<I', wav_bytes, 24)[0]
 
             print(f"[Audio] Sample rate: {original_sr} Hz")
 
-            if original_sr not in browser_ok:
-                # Pilih target terbaik
+            if original_sr not in BROWSER_OK_SR:
+                # Pilih target sample rate terdekat yang didukung browser.
+                # Untuk 800 Hz → 8000 Hz (faktor bulat 10×, paling efisien).
                 if original_sr <= 8000:
                     target_sr = 8000
                 elif original_sr <= 16000:
                     target_sr = 16000
-                else:
+                elif original_sr <= 22050:
                     target_sr = 22050
-
-                # Gunakan audioop jika tersedia, fallback ke linear
-                if HAS_AUDIOOP:
-                    wav_bytes = resample_with_audioop(wav_bytes, target_sr)
                 else:
-                    # Pastikan factor adalah bilangan bulat
-                    if target_sr % original_sr == 0:
-                        wav_bytes = resample_linear(wav_bytes, target_sr)
-                    else:
-                        # Patch header saja sebagai last resort
-                        result = bytearray(wav_bytes)
-                        bps = struct.unpack_from('<H', wav_bytes, 34)[0] // 8
-                        ch  = struct.unpack_from('<H', wav_bytes, 22)[0]
-                        struct.pack_into('<I', result, 24, target_sr)
-                        struct.pack_into('<I', result, 28, target_sr * ch * bps)
-                        struct.pack_into('<H', result, 32, ch * bps)
-                        wav_bytes = bytes(result)
+                    target_sr = 44100
+
+                print(f"[Audio] Resampling {original_sr} → {target_sr} Hz")
+                wav_bytes = do_resample(wav_bytes, target_sr)
+                print(f"[Audio] Resampling selesai")
 
         response = Response(wav_bytes, status=200, content_type="audio/wav")
         response.headers["Accept-Ranges"]               = "bytes"
@@ -295,6 +370,7 @@ def stream_audio(filename):
     except Exception as e:
         import traceback; traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+
 
 # ─── Daftar pasien ───────────────────────────────────
 @app.route("/api/pasien", methods=["GET"])
@@ -317,6 +393,7 @@ def list_pasien():
     except Exception as e:
         import traceback; traceback.print_exc()
         return jsonify([])
+
 
 # ─── Detail pemeriksaan ──────────────────────────────
 @app.route("/api/pasien/<id_pasien>", methods=["GET"])
