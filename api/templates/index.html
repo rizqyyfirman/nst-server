@@ -303,6 +303,26 @@
     font-size:12px; font-weight:600; padding:3px 10px; border-radius:20px;
   }
 
+  .pasien-card .pem-last {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-weight: 500;
+  }
+  
+  .pasien-card .pem-last-time {
+    background: var(--teal-pale);
+    color: var(--teal-dark);
+    border-radius: 20px;
+    padding: 2px 8px;
+    font-weight: 600;
+    font-size: 11px;
+  }
+
   /* Pemeriksaan */
   .pem-list { display:flex; flex-direction:column; gap:16px; }
   .pem-card {
@@ -693,10 +713,17 @@ async function showPanelPasien() {
 
     grid.innerHTML = data.map(p => `
       <div class="pasien-card"
-           onclick="showPanelPemeriksaan('${esc(p.id_pasien)}','${esc(p.nama)}')">
+          onclick="showPanelPemeriksaan('${esc(p.id_pasien)}','${esc(p.nama)}')">
         ${makeAvatar()}
         <h3>${esc(p.nama)}</h3>
         <div class="id">ID: ${esc(p.id_pasien)}</div>
+        ${p.tanggal_terbaru ? `
+          <div class="pem-last">
+            <span>📅 ${esc(p.tanggal_terbaru)}</span>
+            ${p.waktu_terbaru
+              ? `<span class="pem-last-time">🕐 ${esc(p.waktu_terbaru)} WIB</span>`
+              : ''}
+          </div>` : ''}
         <span class="badge">📋 ${p.jumlah_pemeriksaan}× pemeriksaan</span>
       </div>
     `).join('');

@@ -379,17 +379,36 @@ def list_pasien():
         return jsonify({"error": "Unauthorized"}), 401
     try:
         sb  = get_supabase()
-        res = sb.table("pemeriksaan").select("id_pasien, nama").execute()
+        # Ambil semua kolom termasuk tanggal, waktu, created_at
+        res = sb.table("pemeriksaan")\
+                .select("id_pasien, nama, tanggal, waktu, created_at")\
+                .order("created_at", desc=True)\
+                .execute()
         if not res.data or not isinstance(res.data, list):
             return jsonify([])
+
         seen = {}
         for row in res.data:
             pid = row["id_pasien"]
             if pid not in seen:
-                seen[pid] = {"id_pasien": pid, "nama": row["nama"],
-                             "jumlah_pemeriksaan": 0}
+                # Baris pertama = yang terbaru (sudah desc)
+                seen[pid] = {
+                    "id_pasien":          pid,
+                    "nama":               row["nama"],
+                    "jumlah_pemeriksaan": 0,
+                    "tanggal_terbaru":    row.get("tanggal", ""),
+                    "waktu_terbaru":      row.get("waktu", ""),
+                    "created_at_terbaru": row.get("created_at", ""),
+                }
             seen[pid]["jumlah_pemeriksaan"] += 1
-        return jsonify(sorted(seen.values(), key=lambda x: x["nama"]))
+
+        # Urutkan list pasien berdasarkan pemeriksaan terbaru (desc)
+        result = sorted(
+            seen.values(),
+            key=lambda x: x["created_at_terbaru"],
+            reverse=True
+        )
+        return jsonify(result)
     except Exception as e:
         import traceback; traceback.print_exc()
         return jsonify([])
