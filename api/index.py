@@ -9,6 +9,7 @@ import requests as req_lib
 # scipy.signal.resample_poly menggunakan FIR anti-aliasing filter yang presisi.
 # Untuk rasio integer (800→8000 = 10×), hasilnya mathematically identical
 # dengan sumber asli — tidak ada distorsi, tidak ada perubahan karakter suara.
+#HALOOOOOO
 try:
     import numpy as np
     from scipy import signal as scipy_signal
